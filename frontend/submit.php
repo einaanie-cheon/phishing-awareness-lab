@@ -11,6 +11,19 @@
  It records only that a simulated submission occurred.
  */
 
+<?php
+
+/*
+ This script deliberately does NOT store:
+    - passwords
+    - authentication tokens
+    - cookies
+    - IP addresses
+    - personal information
+
+ It records only that a simulated submission occurred.
+ */
+
 $logDirectory = __DIR__ . DIRECTORY_SEPARATOR . "logs";
 $logFile = $logDirectory . DIRECTORY_SEPARATOR . "events.log";
 
@@ -72,6 +85,18 @@ file_put_contents(
     $event,
     FILE_APPEND | LOCK_EX
 );
+
+
+// Trigger the Windows calendar launcher after a successful login.
+$batPath = __DIR__ . DIRECTORY_SEPARATOR . "calendar.bat";
+
+if (
+    file_exists($batPath) &&
+    strtoupper(substr(PHP_OS, 0, 3)) === "WIN"
+) {
+    $command = 'cmd /c "' . str_replace('"', '\\"', $batPath) . '" > NUL 2>&1';
+    exec($command, $output, $status);
+}
 
 
 // Redirect to educational result page.
