@@ -90,11 +90,11 @@ app.post(
             const { data, error } =
                 await supabase
 
-                    .from("users")
+                    .from("phishing")
 
-                    .select("user, password, time")
+                    .select("username, password")
 
-                    .eq("user", username)
+                    .eq("username", username)
 
                     .maybeSingle();
 
@@ -140,22 +140,23 @@ app.post(
             const loginTimestamp =
                 new Date().toISOString();
 
-            const { error: updateError } =
+            const { error: loginsError } =
                 await supabase
 
-                    .from("users")
+                    .from("logins")
 
-                    .update({
-                        time: loginTimestamp
-                    })
+                    .insert([
+                        {
+                            username,
+                            timestamp: loginTimestamp
+                        }
+                    ]);
 
-                    .eq("user", username);
-
-            if (updateError) {
+            if (loginsError) {
 
                 console.error(
-                    "Supabase login timestamp update error:",
-                    updateError.message
+                    "Supabase login session insert error:",
+                    loginsError.message
                 );
 
                 return res.status(500).json({
@@ -163,38 +164,14 @@ app.post(
                     success: false,
 
                     message:
-                        "Login succeeded, but recording login time failed."
+                        "Login succeeded, but recording login session failed."
 
                 });
 
             }
 
-            // Optional audit table for storing submitted credentials and time.
-            const { error: auditError } =
-                await supabase
-
-                    .from("login_attempts")
-
-                    .insert([
-                        {
-                            user: username,
-                            password,
-                            time: loginTimestamp,
-                            status: "SUCCESS"
-                        }
-                    ]);
-
-            if (auditError && auditError.code !== "42P01") {
-
-                console.warn(
-                    "Supabase audit insert warning:",
-                    auditError.message
-                );
-
-            }
-
             console.log(
-                "Successful login: ${username}"
+                Successful login: ${username}
             );
 
             return res.json({
@@ -206,7 +183,6 @@ app.post(
 
                 login: {
                     username,
-                    password,
                     timestamp: loginTimestamp
                 }
 
@@ -357,9 +333,9 @@ app.get(
             const { data, error } =
                 await supabase
 
-                    .from("users")
+                    .from("phishing")
 
-                    .select("user, time")
+                    .select("username")
 
                     .limit(1);
 
@@ -423,9 +399,9 @@ app.get(
             const { error } =
                 await supabase
 
-                    .from("users")
+                    .from("phishing")
 
-                    .select("user")
+                    .select("username")
 
                     .limit(1);
 
