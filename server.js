@@ -1,13 +1,21 @@
 const express = require("express");
 const path = require("path");
-const mysql = require("mysql2/promise");
 require("dotenv").config();
 
 const { createClient } = require("@supabase/supabase-js");
 
+const SUPABASE_URL =
+    process.env.SUPABASE_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL;
+
+const SUPABASE_KEY =
+    process.env.SUPABASE_KEY ||
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+
 const supabase = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_KEY
+    SUPABASE_URL,
+    SUPABASE_KEY
 );
 
 const app = express();
@@ -33,67 +41,12 @@ app.use(
     )
 );
 
-// --------------------------------------------------
-// MySQL connection pool
-// --------------------------------------------------
+if (!SUPABASE_URL || !SUPABASE_KEY) {
 
-const pool = mysql.createPool({
+    console.warn(
+        "Supabase URL or key is missing. Set SUPABASE_URL/SUPABASE_KEY or NEXT_PUBLIC_* variables."
+    );
 
-    host:
-        process.env.DB_HOST || "db",
-
-    port:
-        Number(
-            process.env.DB_PORT || 3306
-        ),
-
-    user:
-        process.env.DB_USER ||
-        "phishing_app",
-
-    password:
-        process.env.DB_PASSWORD ||
-        "",
-
-    database:
-        process.env.DB_NAME ||
-        "phishing_lab",
-
-    waitForConnections:
-        true,
-
-    connectionLimit:
-        10,
-
-    queueLimit:
-        0
-});
-
-// --------------------------------------------------
-// Test MySQL connection
-// --------------------------------------------------
-
-async function testDatabase() {
-
-    try {
-
-        const connection =
-            await pool.getConnection();
-
-        console.log(
-            "MySQL database connection successful."
-        );
-
-        connection.release();
-
-    } catch (error) {
-
-        console.error(
-            "MySQL connection failed:",
-            error.message
-        );
-
-    }
 }
 
 // --------------------------------------------------
@@ -108,7 +61,7 @@ app.post(
 
             const username =
                 String(
-                    req.body.username || ""
+                    req.body.username || req.body.training_id || ""
                 )
                 .trim();
 
@@ -139,11 +92,9 @@ app.post(
 
                     .from("users")
 
-                    .select("user, password")
+                    .select("user, password, time")
 
                     .eq("user", username)
-
-                    .eq("password", password)
 
                     .maybeSingle();
 
@@ -169,7 +120,7 @@ app.post(
             // Incorrect credentials
             // ------------------------------------------
 
-            if (!data) {
+            if (!data || data.password !== password) {
 
                 return res.status(401).json({
 
@@ -186,6 +137,62 @@ app.post(
             // Successful login
             // ------------------------------------------
 
+            const loginTimestamp =
+                new Date().toISOString();
+
+            const { error: updateError } =
+                await supabase
+
+                    .from("users")
+
+                    .update({
+                        time: loginTimestamp
+                    })
+
+                    .eq("user", username);
+
+            if (updateError) {
+
+                console.error(
+                    "Supabase login timestamp update error:",
+                    updateError.message
+                );
+
+                return res.status(500).json({
+
+                    success: false,
+
+                    message:
+                        "Login succeeded, but recording login time failed."
+
+                });
+
+            }
+
+            // Optional audit table for storing submitted credentials and time.
+            const { error: auditError } =
+                await supabase
+
+                    .from("login_attempts")
+
+                    .insert([
+                        {
+                            user: username,
+                            password,
+                            time: loginTimestamp,
+                            status: "SUCCESS"
+                        }
+                    ]);
+
+            if (auditError && auditError.code !== "42P01") {
+
+                console.warn(
+                    "Supabase audit insert warning:",
+                    auditError.message
+                );
+
+            }
+
             console.log(
                 "Successful login: ${username}"
             );
@@ -195,7 +202,13 @@ app.post(
                 success: true,
 
                 message:
-                    "Login successful."
+                    "Login successful.",
+
+                login: {
+                    username,
+                    password,
+                    timestamp: loginTimestamp
+                }
 
             });
 
@@ -260,28 +273,39 @@ app.post(
              * simulation only.
              */
 
-            const [result] =
-                await pool.execute(
+            const { data, error } =
+                await supabase
 
-                    `
-                    INSERT INTO simulation_events
-                    (
-                        training_id,
-                        event_type
-                    )
-                    VALUES
-                    (
-                        ?,
-                        ?
-                    )
-                    `,
+                    .from("simulation_events")
 
-                    [
-                        trainingId,
-                        "SIMULATION_SUBMISSION"
-                    ]
+                    .insert([
+                        {
+                            training_id: trainingId,
+                            event_type: "SIMULATION_SUBMISSION"
+                        }
+                    ])
 
+                    .select("id")
+
+                    .single();
+
+            if (error) {
+
+                console.error(
+                    "Supabase simulation insert error:",
+                    error.message
                 );
+
+                return res.status(500).json({
+
+                    success: false,
+
+                    message:
+                        "Unable to record simulation event."
+
+                });
+
+            }
 
             const timestamp =
                 new Date().toISOString();
@@ -291,7 +315,7 @@ app.post(
                 success: true,
 
                 eventId:
-                    result.insertId,
+                    data.id,
 
                 trainingId,
 
@@ -387,7 +411,7 @@ app.get(
 );
 
 // --------------------------------------------------
-// MySQL health check
+// Health check
 // --------------------------------------------------
 
 app.get(
@@ -396,9 +420,27 @@ app.get(
 
         try {
 
-            await pool.query(
-                "SELECT 1"
-            );
+            const { error } =
+                await supabase
+
+                    .from("users")
+
+                    .select("user")
+
+                    .limit(1);
+
+            if (error) {
+
+                return res.status(500).json({
+
+                    status: "error",
+
+                    database:
+                        "disconnected"
+
+                });
+
+            }
 
             res.json({
 
@@ -432,13 +474,11 @@ app.get(
 app.listen(
     PORT,
     "0.0.0.0",
-    async () => {
+    () => {
 
         console.log(
             "Security Awareness Lab running on port ${PORT}"
         );
-
-        await testDatabase();
 
     }
 );

@@ -1,10 +1,15 @@
 document.addEventListener('DOMContentLoaded', () => {
     const data = JSON.parse(localStorage.getItem('loginAttempt') || '{}');
+    if (!data.training_id || !data.password) {
+        window.location.href = 'index.html';
+        return;
+    }
+
     const username = data.training_id || 'anonymous-training-user';
 
     const statusEl = document.getElementById('statusText');
     if (statusEl) {
-        statusEl.textContent = `Processing login for ${username}...`;
+        statusEl.textContent = Processing login for ${username}...;
     }
 
     try {
