@@ -1,38 +1,25 @@
 const express = require("express");
 const path = require("path");
+const mysql = require("mysql2/promise");
 require("dotenv").config();
 
-const { createClient } = require("@supabase/supabase-js");
-
-const SUPABASE_URL =
-    process.env.SUPABASE_URL ||
-    process.env.NEXT_PUBLIC_SUPABASE_URL;
-
-const SUPABASE_KEY =
-    process.env.SUPABASE_KEY ||
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-
-const supabase = createClient(
-    SUPABASE_URL,
-    SUPABASE_KEY
-);
-
 const app = express();
+
 const PORT = process.env.PORT || 3000;
+
 
 // --------------------------------------------------
 // Middleware
 // --------------------------------------------------
 
 app.use(express.json());
-
 app.use(express.urlencoded({
     extended: false
 }));
 
+
 // --------------------------------------------------
-// Serve frontend
+// Serve the existing frontend
 // --------------------------------------------------
 
 app.use(
@@ -41,173 +28,70 @@ app.use(
     )
 );
 
-if (!SUPABASE_URL || !SUPABASE_KEY) {
 
-    console.warn(
-        "Supabase URL or key is missing. Set SUPABASE_URL/SUPABASE_KEY or NEXT_PUBLIC_* variables."
-    );
+// --------------------------------------------------
+// MySQL connection pool
+// --------------------------------------------------
 
+const pool = mysql.createPool({
+
+    host:
+        process.env.DB_HOST || "db",
+
+    port:
+        Number(
+            process.env.DB_PORT || 3306
+        ),
+
+    user:
+        process.env.DB_USER ||
+        "phishing_app",
+
+    password:
+        process.env.DB_PASSWORD ||
+        "",
+
+    database:
+        process.env.DB_NAME ||
+        "phishing_lab",
+
+    waitForConnections:
+        true,
+
+    connectionLimit:
+        10,
+
+    queueLimit:
+        0
+});
+
+
+// --------------------------------------------------
+// Test database connection
+// --------------------------------------------------
+
+async function testDatabase() {
+
+    try {
+
+        const connection =
+            await pool.getConnection();
+
+        console.log(
+            "MySQL database connection successful."
+        );
+
+        connection.release();
+
+    } catch (error) {
+
+        console.error(
+            "MySQL connection failed:",
+            error.message
+        );
+    }
 }
 
-// --------------------------------------------------
-// LOGIN
-// --------------------------------------------------
-
-app.post(
-    "/api/login",
-    async (req, res) => {
-
-        try {
-
-            const username =
-                String(
-                    req.body.username || req.body.training_id || ""
-                )
-                .trim();
-
-            const password =
-                String(
-                    req.body.password || ""
-                );
-
-            if (!username || !password) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Username and password are required."
-
-                });
-
-            }
-
-            // ------------------------------------------
-            // Check username and password in Supabase
-            // ------------------------------------------
-
-            const { data, error } =
-                await supabase
-
-                    .from("phishing")
-
-                    .select("username, password")
-
-                    .eq("username", username)
-
-                    .maybeSingle();
-
-            if (error) {
-
-                console.error(
-                    "Supabase login error:",
-                    error.message
-                );
-
-                return res.status(500).json({
-
-                    success: false,
-
-                    message:
-                        "Database error."
-
-                });
-
-            }
-
-            // ------------------------------------------
-            // Incorrect credentials
-            // ------------------------------------------
-
-            if (!data || data.password !== password) {
-
-                return res.status(401).json({
-
-                    success: false,
-
-                    message:
-                        "Invalid username or password."
-
-                });
-
-            }
-
-            // ------------------------------------------
-            // Successful login
-            // ------------------------------------------
-
-            const loginTimestamp =
-                new Date().toISOString();
-
-            const { error: loginsError } =
-                await supabase
-
-                    .from("logins")
-
-                    .insert([
-                        {
-                            username,
-                            timestamp: loginTimestamp
-                        }
-                    ]);
-
-            if (loginsError) {
-
-                console.error(
-                    "Supabase login session insert error:",
-                    loginsError.message
-                );
-
-                return res.status(500).json({
-
-                    success: false,
-
-                    message:
-                        "Login succeeded, but recording login session failed."
-
-                });
-
-            }
-
-            console.log(
-                Successful login: ${username}
-            );
-
-            return res.json({
-
-                success: true,
-
-                message:
-                    "Login successful.",
-
-                login: {
-                    username,
-                    timestamp: loginTimestamp
-                }
-
-            });
-
-        } catch (error) {
-
-            console.error(
-                "Login error:",
-                error.message
-            );
-
-            return res.status(500).json({
-
-                success: false,
-
-                message:
-                    "Unable to process login."
-
-            });
-
-        }
-
-    }
-);
 
 // --------------------------------------------------
 // Security-awareness simulation endpoint
@@ -226,6 +110,7 @@ app.post(
                 .trim()
                 .slice(0, 50);
 
+
             if (!trainingId) {
 
                 return res.status(400).json({
@@ -236,8 +121,8 @@ app.post(
                         "Training ID is required."
 
                 });
-
             }
+
 
             /*
              * IMPORTANT:
@@ -249,49 +134,40 @@ app.post(
              * simulation only.
              */
 
-            const { data, error } =
-                await supabase
 
-                    .from("simulation_events")
+            const [result] =
+                await pool.execute(
 
-                    .insert([
-                        {
-                            training_id: trainingId,
-                            event_type: "SIMULATION_SUBMISSION"
-                        }
-                    ])
+                    `
+                    INSERT INTO simulation_events
+                    (
+                        training_id,
+                        event_type
+                    )
+                    VALUES
+                    (
+                        ?,
+                        ?
+                    )
+                    `,
 
-                    .select("id")
-
-                    .single();
-
-            if (error) {
-
-                console.error(
-                    "Supabase simulation insert error:",
-                    error.message
+                    [
+                        trainingId,
+                        "SIMULATION_SUBMISSION"
+                    ]
                 );
 
-                return res.status(500).json({
-
-                    success: false,
-
-                    message:
-                        "Unable to record simulation event."
-
-                });
-
-            }
 
             const timestamp =
                 new Date().toISOString();
+
 
             return res.json({
 
                 success: true,
 
                 eventId:
-                    data.id,
+                    result.insertId,
 
                 trainingId,
 
@@ -306,6 +182,7 @@ app.post(
                 error.message
             );
 
+
             return res.status(500).json({
 
                 success: false,
@@ -314,80 +191,13 @@ app.post(
                     "Unable to record simulation event."
 
             });
-
         }
-
     }
 );
 
-// --------------------------------------------------
-// Supabase health check
-// --------------------------------------------------
-
-app.get(
-    "/api/supabase-test",
-    async (req, res) => {
-
-        try {
-
-            const { data, error } =
-                await supabase
-
-                    .from("phishing")
-
-                    .select("username")
-
-                    .limit(1);
-
-            if (error) {
-
-                console.error(
-                    "Supabase error:",
-                    error.message
-                );
-
-                return res.status(500).json({
-
-                    success: false,
-
-                    error:
-                        error.message
-
-                });
-
-            }
-
-            return res.json({
-
-                success: true,
-
-                data
-
-            });
-
-        } catch (error) {
-
-            console.error(
-                "Supabase test error:",
-                error.message
-            );
-
-            return res.status(500).json({
-
-                success: false,
-
-                error:
-                    error.message
-
-            });
-
-        }
-
-    }
-);
 
 // --------------------------------------------------
-// Health check
+// Database health check
 // --------------------------------------------------
 
 app.get(
@@ -396,34 +206,16 @@ app.get(
 
         try {
 
-            const { error } =
-                await supabase
+            await pool.query(
+                "SELECT 1"
+            );
 
-                    .from("phishing")
-
-                    .select("username")
-
-                    .limit(1);
-
-            if (error) {
-
-                return res.status(500).json({
-
-                    status: "error",
-
-                    database:
-                        "disconnected"
-
-                });
-
-            }
 
             res.json({
 
                 status: "ok",
 
-                database:
-                    "connected"
+                database: "connected"
 
             });
 
@@ -433,15 +225,13 @@ app.get(
 
                 status: "error",
 
-                database:
-                    "disconnected"
+                database: "disconnected"
 
             });
-
         }
-
     }
 );
+
 
 // --------------------------------------------------
 // Start server
@@ -450,11 +240,13 @@ app.get(
 app.listen(
     PORT,
     "0.0.0.0",
-    () => {
+    async () => {
 
         console.log(
-            "Security Awareness Lab running on port ${PORT}"
+            `Security Awareness Lab running on port ${PORT}`
         );
+
+        await testDatabase();
 
     }
 );
